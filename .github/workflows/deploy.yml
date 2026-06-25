@@ -4,26 +4,54 @@ on:
     branches:
       - main
       - master
+
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
 jobs:
   deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      
       - uses: actions/setup-python@v5
         with:
           python-version: 3.x
+          
       - run: echo "cache_id=$(date --utc '+%V')" >> $GITHUB_ENV 
+      
       - uses: actions/cache@v4
         with:
           key: mkdocs-material-${{ env.cache_id }}
           path: .cache
           restore-keys: |
             mkdocs-material-
+            
       - run: pip install mkdocs-material 
+      
       - run: |
           mkdir -p docs
           if [ -f README.md ]; then cp README.md docs/index.md; fi
           if [ ! -f docs/index.md ]; then echo "# Welcome" > docs/index.md; fi
-      - run: mkdocs gh-deploy --force
+          
+      # כאן אנחנו בונים את האתר לתיקיית פלט סטטית במקום לדחוף לענף אחר
+      - run: mkdocs build
+      
+      - name: Upload Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          # תיקיית ברירת המחדל של MkDocs היא site
+          path: './site'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

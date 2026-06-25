@@ -22,4 +22,8 @@ jobs:
           restore-keys: |
             mkdocs-material-
       - run: pip install mkdocs-material 
+      - run: |
+          mkdir -p docs
+          if [ -f README.md ]; then cp README.md docs/index.md; fi
+          if [ ! -f docs/index.md ]; then echo "# Welcome" > docs/index.md; fi
       - run: mkdocs gh-deploy --force

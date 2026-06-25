@@ -99,13 +99,13 @@ export default function App() {
       const docsFolder = zip.folder("docs");
       if (docsFolder) {
         // פיצול התוכן לפי הכותרות הראשיות (לדוגמה) או סתם יצירת קובץ בתוך התיקייה
-        docsFolder.file("README.md", docData.markdown);
+        docsFolder.file("index.md", docData.markdown);
       }
 
       // mkdocs.yml config
       const mkdocsConfig = `site_name: My Documentation
 nav:
-  - Home: README.md
+  - Home: index.md
 theme:
   name: material
 `;
@@ -136,6 +136,10 @@ jobs:
           restore-keys: |
             mkdocs-material-
       - run: pip install mkdocs-material 
+      - run: |
+          mkdir -p docs
+          if [ -f README.md ]; then cp README.md docs/index.md; fi
+          if [ ! -f docs/index.md ]; then echo "# Welcome" > docs/index.md; fi
       - run: mkdocs gh-deploy --force
 `;
       const githubFolder = zip.folder(".github");

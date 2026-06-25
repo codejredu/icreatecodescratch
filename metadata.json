@@ -1,0 +1,6 @@
+{
+  "name": "Micro:bit iCreate Docs",
+  "description": "Educational website for Micro:bit robotics in Hebrew.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

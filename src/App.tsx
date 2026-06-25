@@ -102,6 +102,46 @@ export default function App() {
         docsFolder.file("README.md", docData.markdown);
       }
 
+      // mkdocs.yml config
+      const mkdocsConfig = `site_name: My Documentation
+nav:
+  - Home: README.md
+theme:
+  name: material
+`;
+      zip.file("mkdocs.yml", mkdocsConfig);
+
+      // GitHub actions workflow
+      const workflowConfig = `name: ci
+on:
+  push:
+    branches:
+      - main
+      - master
+permissions:
+  contents: write
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: 3.x
+      - run: echo "cache_id=$(date --utc '+%V')" >> $GITHUB_ENV 
+      - uses: actions/cache@v4
+        with:
+          key: mkdocs-material-\${{ env.cache_id }}
+          path: .cache
+          restore-keys: |
+            mkdocs-material-
+      - run: pip install mkdocs-material 
+      - run: mkdocs gh-deploy --force
+`;
+      const githubFolder = zip.folder(".github");
+      const workflowsFolder = githubFolder?.folder("workflows");
+      workflowsFolder?.file("deploy.yml", workflowConfig);
+
       // קובץ README בתיקייה הראשית (אופציונלי) 
       zip.file("README.md", `# מסמך מיוצא\n\nראה את תוכן המסמך בתיקיית docs/README.md.\n\n[למעבר לתיעוד](docs/README.md)`);
 

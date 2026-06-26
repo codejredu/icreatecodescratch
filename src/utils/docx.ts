@@ -1,43 +1,107 @@
 import mammoth from 'mammoth';
 import TurndownService from 'turndown';
+import { gfm } from 'turndown-plugin-gfm';
 import { DocData, DocSection } from '../types';
+
+function findFirstTextNode(node: Node): Node | null {
+  if (node.nodeType === 3) return node; // 3 is Node.TEXT_NODE
+  for (let i = 0; i < node.childNodes.length; i++) {
+    const found = findFirstTextNode(node.childNodes[i]);
+    if (found) return found;
+  }
+  return null;
+}
+
+function findLastTextNode(node: Node): Node | null {
+  if (node.nodeType === 3) return node; // 3 is Node.TEXT_NODE
+  for (let i = node.childNodes.length - 1; i >= 0; i--) {
+    const found = findLastTextNode(node.childNodes[i]);
+    if (found) return found;
+  }
+  return null;
+}
 
 export type ThemeColor = 'activePresenter' | 'classic' | 'grayscale' | 'blue' | 'blueGreen' | 'green' | 'greenYellow' | 'red' | 'redViolet' | 'yellow' | 'yellowOrange';
 
 export async function processDocx(arrayBuffer: ArrayBuffer, theme: ThemeColor = 'activePresenter'): Promise<DocData> {
+  let html = '';
   try {
     const result = await mammoth.convertToHtml({ arrayBuffer });
-    let html = result.value;
+    html = result.value;
+  } catch (mammothError: any) {
+    console.error('Mammoth failed to parse file:', mammothError);
+    const msg = mammothError?.message || '';
+    if (msg.includes('zip') || msg.includes('word/document.xml') || msg.includes('Can\'t find') || msg.includes('signature')) {
+      throw new Error('קובץ לא תקין או שאינו בפורמט DOCX. שים לב: המערכת תומכת בקבצי Word מסוג DOCX בלבד (לא קבצי .doc ישנים, PDF, תמונות או קבצים פגומים). אנא שמור את הקובץ מחדש כ-Word Document (.docx) ונסה שוב.');
+    }
+    throw new Error(`שגיאה בקריאת קובץ ה-Word: ${msg || 'ודא שהקובץ תקין ובפורמט .docx'}`);
+  }
 
+  let markdown = '';
+  const sections: DocSection[] = [];
+  let styledHtml = html;
+
+  try {
     const parser = new DOMParser();
     const doc = parser.parseFromString(html, 'text/html');
 
     // המרת פסקאות שמתחילות ב-# לכותרות, והסרת ה-# מכותרות קיימות
-    doc.querySelectorAll('p, h1, h2, h3, h4').forEach(el => {
-      const text = el.textContent || '';
-      const match = text.match(/^(#{1,4})\s*(.*)/);
+    doc.querySelectorAll('p, h1, h2, h3, h4, h5, h6').forEach(el => {
+      const htmlElement = el as HTMLElement;
+      const rawText = htmlElement.textContent || '';
+      const text = rawText.trim().replace(/\xa0/g, ' ').replace(/[\u200B-\u200D\uFEFF]/g, '');
+      
+      const match = text.match(/^(#{1,6})\s*(.*?)\s*(?:#*\s*)?$/);
       if (match) {
         const level = match[1].length;
-        const newText = match[2].trim();
         
-        if (el.tagName.toLowerCase() !== `h${level}`) {
-          const heading = doc.createElement(`h${level}`);
-          heading.textContent = newText;
-          el.parentNode?.replaceChild(heading, el);
-        } else {
-          el.textContent = newText;
+        // Strip leading hashes recursively from the first text node in this element to preserve HTML formatting
+        const firstTextNode = findFirstTextNode(htmlElement);
+        if (firstTextNode) {
+          const nodeText = firstTextNode.nodeValue || '';
+          const normalized = nodeText.replace(/\xa0/g, ' ').replace(/[\u200B-\u200D\uFEFF]/g, '');
+          const stripped = normalized.replace(/^\s*(?:#{1,6})\s*/, '');
+          firstTextNode.nodeValue = stripped;
+        }
+
+        // Strip trailing hashes recursively from the last text node if the original text ended with #
+        if (text.endsWith('#')) {
+          const lastTextNode = findLastTextNode(htmlElement);
+          if (lastTextNode) {
+            const nodeText = lastTextNode.nodeValue || '';
+            const normalized = nodeText.replace(/\xa0/g, ' ').replace(/[\u200B-\u200D\uFEFF]/g, '');
+            const stripped = normalized.replace(/\s*#+\s*$/, '');
+            lastTextNode.nodeValue = stripped;
+          }
+        }
+
+        // Convert the element to the correct header tag level while preserving its children (bold, colors, links)
+        const targetTagName = `h${level}`;
+        if (htmlElement.tagName.toLowerCase() !== targetTagName) {
+          const heading = doc.createElement(targetTagName);
+          while (htmlElement.firstChild) {
+            heading.appendChild(htmlElement.firstChild);
+          }
+          htmlElement.parentNode?.replaceChild(heading, htmlElement);
         }
       }
     });
 
-    const headings = doc.querySelectorAll('h1, h2, h3, h4');
-    const sections: DocSection[] = [];
+    // יצירת Markdown לאחר המרת הכותרות, לפני הוספת עיצובים נוספים
+    const turndownService = new TurndownService({ headingStyle: 'atx' });
+    turndownService.use(gfm);
+    markdown = turndownService.turndown(doc.body.innerHTML);
+
+    const headings = doc.querySelectorAll('h1, h2, h3, h4, h5, h6');
 
     headings.forEach((heading, index) => {
       const id = `sec-${index}`;
       heading.setAttribute('id', id);
       
       let textContent = heading.textContent || 'ללא כותרת';
+      // Clean up any remaining leading or trailing # characters and spaces, since they are only for formatting/layout
+      textContent = textContent.replace(/^[\s#]+/, '').replace(/[\s#]+$/, '').trim();
+      
       let tag = '';
 
       // זיהוי תגיות טקסט לעיצובים מיוחדים
@@ -52,11 +116,13 @@ export async function processDocx(arrayBuffer: ArrayBuffer, theme: ThemeColor = 
         textContent = textContent.replace('[הצלחה]', '').trim();
       }
 
-      // עדכון הטקסט ב-DOM כדי להסתיר את התגית מהתצוגה
-      heading.textContent = textContent;
+      // עדכון הטקסט ב-DOM כדי להסתיר את התגית מהתצוגה - רק אם יש תגית, נשנה את textContent כדי לא להרוס עיצובי פנים סתם
+      if (tag) {
+        heading.textContent = textContent;
+      }
 
       // הגדרת עיצוב בסיסי
-      const baseClasses = 'mt-8 mb-4 font-bold py-3 px-4 rounded-lg border-r-4 shadow-sm scroll-mt-20 block w-full';
+      const baseClasses = 'mt-8 mb-4 font-bold py-3 px-4 rounded-lg border-r-4 shadow-sm scroll-mt-20 block w-full text-right';
       
       if (tag === 'warning') {
         heading.className = `${baseClasses} text-red-900 bg-red-50 border-red-500`;
@@ -151,56 +217,67 @@ export async function processDocx(arrayBuffer: ArrayBuffer, theme: ThemeColor = 
       if (heading.tagName === 'H2') heading.classList.add('text-xl');
       if (heading.tagName === 'H3') heading.classList.add('text-lg');
       
+      const levelChar = heading.tagName[1];
       sections.push({
         id,
         title: textContent,
-        level: parseInt(heading.tagName[1]),
+        level: parseInt(levelChar) || 1,
       });
     });
 
     // Style standard elements generated by mammoth
-    doc.querySelectorAll('p').forEach(p => p.className = 'mb-4 leading-relaxed text-gray-700');
-    doc.querySelectorAll('ul').forEach(ul => ul.className = 'list-disc list-inside mb-4 space-y-1');
-    doc.querySelectorAll('ol').forEach(ol => ol.className = 'list-decimal list-inside mb-4 space-y-1');
+    doc.querySelectorAll('p').forEach(p => p.className = 'mb-4 leading-relaxed text-gray-700 text-right');
+    doc.querySelectorAll('ul').forEach(ul => ul.className = 'list-disc list-inside mb-4 space-y-1 text-right');
+    doc.querySelectorAll('ol').forEach(ol => ol.className = 'list-decimal list-inside mb-4 space-y-1 text-right');
     doc.querySelectorAll('a').forEach(a => a.className = 'text-blue-600 hover:underline');
     doc.querySelectorAll('table').forEach(table => {
-      // Create a wrapper for modern table styling (shadow, rounded corners, responsive scroll)
       const wrapper = doc.createElement('div');
       wrapper.className = 'overflow-x-auto mb-8 bg-white shadow-sm border border-gray-200 rounded-lg';
       table.parentNode?.insertBefore(wrapper, table);
       wrapper.appendChild(table);
-
-      table.className = 'min-w-full divide-y divide-gray-200 text-right';
+      table.className = 'min-w-full text-right border-collapse border border-gray-200';
     });
 
-    // Style table rows
     doc.querySelectorAll('tr').forEach(tr => {
       tr.className = 'hover:bg-gray-50 transition-colors group';
     });
 
-    // Style table headers
     doc.querySelectorAll('th').forEach(th => {
-      th.className = 'px-4 py-3 text-sm font-semibold text-gray-900 bg-gray-50 border-b border-gray-200 text-right';
+      th.className = 'px-4 py-3 text-sm font-semibold text-gray-900 bg-gray-50 border border-gray-300 text-right';
     });
 
-    // Style table cells
     doc.querySelectorAll('td').forEach(td => {
-      td.className = 'px-4 py-3 text-sm text-gray-700 border-b border-gray-100 group-last:border-b-0 align-top';
+      td.className = 'px-4 py-3 text-sm text-gray-700 border border-gray-200 align-top text-right';
     });
 
-    const styledHtml = doc.body.innerHTML;
+    styledHtml = doc.body.innerHTML;
+  } catch (domError: any) {
+    console.error('DOM parsing or styling failed, using original mammoth HTML:', domError);
+    // Graceful fallback to raw mammoth conversion
+    const fallbackService = new TurndownService({ headingStyle: 'atx' });
+    fallbackService.use(gfm);
+    markdown = fallbackService.turndown(html);
+    styledHtml = html;
 
-    // Convert original HTML to Markdown for GitHub
-    const turndownService = new TurndownService({ headingStyle: 'atx' });
-    const markdown = turndownService.turndown(html);
-
-    return {
-      html: styledHtml,
-      markdown,
-      sections,
-    };
-  } catch (error) {
-    console.error('Error processing DOCX:', error);
-    throw new Error('שגיאה בעיבוד הקובץ. אנא ודא שזהו קובץ DOCX תקין.');
+    // Generate basic sections from original h1-h4
+    try {
+      const fallbackParser = new DOMParser();
+      const fallbackDoc = fallbackParser.parseFromString(html, 'text/html');
+      fallbackDoc.querySelectorAll('h1, h2, h3, h4, h5, h6').forEach((heading, index) => {
+        sections.push({
+          id: `sec-${index}`,
+          title: heading.textContent || 'ללא כותרת',
+          level: parseInt(heading.tagName[1]) || 1
+        });
+      });
+    } catch (e) {
+      console.error('Failed to parse fallback sections:', e);
+    }
   }
+
+  return {
+    html: styledHtml,
+    markdown,
+    sections,
+  };
 }

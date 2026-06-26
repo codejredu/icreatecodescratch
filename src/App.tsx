@@ -95,19 +95,97 @@ export default function App() {
     try {
       const zip = new JSZip();
       
-      // הוספת תיקיית docs
+      // הוספת תיקיית docs בצורה מפורשת עבור תאימות של תוכנות פתיחת ZIP ומערכות הפעלה
       const docsFolder = zip.folder("docs");
-      if (docsFolder) {
-        // פיצול התוכן לפי הכותרות הראשיות (לדוגמה) או סתם יצירת קובץ בתוך התיקייה
-        docsFolder.file("index.md", docData.markdown);
+      let navItems: string[] = [];
+
+      const fullMd = docData.markdown;
+      const lines = fullMd.split('\n');
+      
+      let currentFileTitle = 'ראשי';
+      let currentFileName = 'index.md';
+      let currentContent: string[] = [];
+      let fileCounter = 1;
+      
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.startsWith('## ')) {
+          if (currentContent.length > 0 && currentContent.join('').trim().length > 0) {
+            docsFolder?.file(currentFileName, currentContent.join('\n'));
+            navItems.push(`  - "${currentFileTitle.replace(/"/g, '\\"')}": ${currentFileName}`);
+          }
+          
+          currentFileTitle = line.replace(/^##\s*/, '').replace(/^#+\s*/, '').replace(/\s*#+$/, '').trim();
+          const safeName = `section-${fileCounter}`;
+          currentFileName = `${safeName}.md`;
+          currentContent = [line];
+          fileCounter++;
+        } else {
+          currentContent.push(line);
+        }
+      }
+      
+      if (currentContent.length > 0 && currentContent.join('').trim().length > 0) {
+        docsFolder?.file(currentFileName, currentContent.join('\n'));
+        navItems.push(`  - "${currentFileTitle.replace(/"/g, '\\"')}": ${currentFileName}`);
+      }
+      
+      const hasIndex = navItems.some(nav => nav.endsWith(': index.md'));
+      if (!hasIndex) {
+        docsFolder?.file("index.md", "# ברוכים הבאים\n\nאנא בחרו נושא מהתפריט.");
+        navItems.unshift(`  - "ראשי": index.md`);
       }
 
+      const navString = navItems.length > 0 ? navItems.join('\n') : '  - "ראשי": index.md';
+
       // mkdocs.yml config
+      let mkdocsColor = 'indigo';
+      switch(theme) {
+        case 'activePresenter': mkdocsColor = 'teal'; break;
+        case 'classic': mkdocsColor = 'indigo'; break;
+        case 'grayscale': mkdocsColor = 'grey'; break;
+        case 'blue': mkdocsColor = 'blue'; break;
+        case 'blueGreen': mkdocsColor = 'teal'; break;
+        case 'green': mkdocsColor = 'green'; break;
+        case 'greenYellow': mkdocsColor = 'light green'; break;
+        case 'red': mkdocsColor = 'red'; break;
+        case 'redViolet': mkdocsColor = 'purple'; break;
+        case 'yellow': mkdocsColor = 'yellow'; break;
+        case 'yellowOrange': mkdocsColor = 'orange'; break;
+      }
+
+      const mkdocsFont = font === 'font-rubik' ? 'Rubik' : font === 'font-alef' ? 'Alef' : 'Heebo';
+
       const mkdocsConfig = `site_name: My Documentation
+site_url: https://your-username.github.io/your-repo-name/
 nav:
-  - Home: index.md
+${navString}
 theme:
   name: material
+  language: he
+  font:
+    text: ${mkdocsFont}
+  features:
+    - navigation.sections
+    - toc.integrate
+    - navigation.top
+    - search.suggest
+    - search.highlight
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: ${mkdocsColor}
+      accent: ${mkdocsColor}
+      toggle:
+        icon: material/brightness-7 
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: ${mkdocsColor}
+      accent: ${mkdocsColor}
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
 `;
       zip.file("mkdocs.yml", mkdocsConfig);
 
@@ -136,20 +214,45 @@ jobs:
           restore-keys: |
             mkdocs-material-
       - run: pip install mkdocs-material 
-      - run: |
-          mkdir -p docs
-          if [ -f README.md ]; then cp README.md docs/index.md; fi
-          if [ ! -f docs/index.md ]; then echo "# Welcome" > docs/index.md; fi
       - run: mkdocs gh-deploy --force
 `;
       const githubFolder = zip.folder(".github");
       const workflowsFolder = githubFolder?.folder("workflows");
       workflowsFolder?.file("deploy.yml", workflowConfig);
 
-      // קובץ README בתיקייה הראשית (אופציונלי) 
-      zip.file("README.md", `# מסמך מיוצא\n\nראה את תוכן המסמך בתיקיית docs/README.md.\n\n[למעבר לתיעוד](docs/README.md)`);
+      // קובץ .gitignore עבור MkDocs
+      const gitignoreContent = `site/
+.cache/
+.DS_Store
+*.log
+`;
+      zip.file(".gitignore", gitignoreContent);
 
-      const blob = await zip.generateAsync({ type: "blob" });
+      // קובץ README בתיקייה הראשית (אופציונלי) 
+      const readmeContent = `# מסמך מיוצא
+
+המסמך שלך יוצא בהצלחה.
+
+## איך לראות את האתר ב-GitHub Pages?
+1. העלה את כל הקבצים שחולצו מקובץ ה-ZIP למאגר (Repository) ב-GitHub.
+2. ה-GitHub Actions ירוץ אוטומטית וייצור ענף בשם \`gh-pages\`.
+3. גש ב-GitHub להגדרות המאגר: **Settings** -> **Pages**.
+4. ודא שה-Source מוגדר ל-Deploy from a branch, והענף שנבחר הוא \`gh-pages\`.
+5. הקישור לאתר יופיע בראש העמוד בהגדרות שם, בדרך כלל בפורמט:
+   \`https://<username>.github.io/<repo-name>/\`
+
+ראה את תוכן המסמך המקורי ב-[docs/index.md](docs/index.md).
+`;
+      zip.file("README.md", readmeContent);
+
+      const blob = await zip.generateAsync({
+        type: "blob",
+        platform: "DOS",
+        compression: "DEFLATE",
+        compressionOptions: {
+          level: 9
+        }
+      });
       saveAs(blob, "github-export.zip");
     } catch (error) {
       console.error("Error generating zip:", error);
